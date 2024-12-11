@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs::File,
     io::{BufReader, Read},
 };
@@ -11,8 +12,8 @@ fn main() -> std::io::Result<()> {
     let p1 = do_part_one(&stones);
     dbg!(p1);
     // Part two
-    // let p2 = do_part_two(&stones);
-    // dbg!(p2);
+    let p2 = do_part_two(&stones);
+    dbg!(p2);
     Ok(())
 }
 
@@ -117,4 +118,43 @@ mod tests {
     fn m202411() {
         assert_eq!("22264", multiply_strings("11", "2024"));
     }
+}
+
+fn do_part_two(stones: &[String]) -> u64 {
+    let mut cache = HashMap::new();
+    let mut retval = 0;
+    for st in stones {
+        let st = st.parse::<u64>().unwrap();
+        retval += do_part_two_rec(&mut cache, 0, st);
+    }
+    retval
+}
+
+const PART_TWO_LIMIT: u64 = 75;
+fn do_part_two_rec(cache: &mut HashMap<(u64, u64), u64>, iteration: u64, count: u64) -> u64 {
+    let cache_key = (iteration, count);
+    if let Some(&retval) = cache.get(&cache_key) {
+        return retval;
+    }
+    if iteration >= PART_TWO_LIMIT {
+        return 1;
+    }
+    if count == 0 {
+        return do_part_two_rec(cache, iteration + 1, 1);
+    }
+    let w = width(count);
+    let retval = if w % 2 == 0 {
+        let places = 10_u64.pow(w / 2);
+        let a = do_part_two_rec(cache, iteration + 1, count / places);
+        let b = do_part_two_rec(cache, iteration + 1, count % places);
+        a + b
+    } else {
+        do_part_two_rec(cache, iteration + 1, count * 2024)
+    };
+    cache.insert(cache_key, retval);
+    retval
+}
+
+fn width(x: u64) -> u32 {
+    (x as f64 + 0.1).log10().ceil() as u32
 }
