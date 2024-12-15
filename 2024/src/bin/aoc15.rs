@@ -54,7 +54,7 @@ fn parse_input(r: BufReader<File>) -> (Map, Vec<Direction>) {
 fn do_part_one(map: &Map, directions: &[Direction]) -> u64 {
     let mut map = map.clone();
     for &dxn in directions.iter() {
-        map.try_move(dxn);
+        let _did_move = map.try_move(dxn);
         // println!("{map}");
     }
     map.box_gps_total()
@@ -102,7 +102,7 @@ struct Map {
 }
 
 impl Map {
-    fn try_move(&mut self, dxn: Direction) {
+    fn try_move(&mut self, dxn: Direction) -> bool {
         let (x, y) = self.robot_xy;
         let (dx, dy) = dxn.as_wrapping_dxdy();
         // "h" for "hypothetical"
@@ -113,6 +113,7 @@ impl Map {
                 self.tiles[y][x] = MapTile::Open;
                 self.tiles[hy][hx] = MapTile::Robot;
                 self.robot_xy = (hx, hy);
+                true
             }
             MapTile::Box => {
                 // Only legal if not blocked by a wall.  The robot is infinitely strong; no "Sokoban" limit.
@@ -129,13 +130,14 @@ impl Map {
                         self.tiles[hy][hx] = MapTile::Robot;
                         self.tiles[y][x] = MapTile::Open;
                         self.robot_xy = (hx, hy);
+                        true
                     }
                     MapTile::Box => unreachable!("while == Box, above"),
-                    MapTile::Wall => (),
+                    MapTile::Wall => false,
                     MapTile::Robot => panic!("really cannot have two robots"),
                 }
             }
-            MapTile::Wall => (),
+            MapTile::Wall => false,
             MapTile::Robot => panic!("cannot have two robots"),
         }
     }
