@@ -1,6 +1,7 @@
 // Advent of ... Sokoban?
 
 use std::{
+    collections::HashSet,
     fmt::{Display, Formatter, Write},
     fs::File,
     io::{BufRead, BufReader},
@@ -8,17 +9,20 @@ use std::{
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let path_input = args.get(1).expect("Should have an input file");
-    let f = File::open(path_input)?;
-    let (map, directions) = parse_input(BufReader::new(f));
     // Part one
-    let p1 = do_part_one(&map, &directions);
+    let f = File::open(path_input)?;
+    let (map, directions) = parse_input(BufReader::new(f), false);
+    let p1 = do_either_part(map, &directions);
     dbg!(p1);
     // Part two
-    // do_part_two(&mut robots, height, width);
+    let f = File::open(path_input)?;
+    let (map, directions) = parse_input(BufReader::new(f), true);
+    let p2 = do_either_part(map, &directions);
+    dbg!(p2);
     Ok(())
 }
 
-fn parse_input(r: BufReader<File>) -> (Map, Vec<Direction>) {
+fn parse_input(r: BufReader<File>, is_double_width: bool) -> (Map, Vec<Direction>) {
     let mut map = Map::default();
     let mut directions = vec![];
     let mut have_reached_directions = false;
@@ -33,7 +37,17 @@ fn parse_input(r: BufReader<File>) -> (Map, Vec<Direction>) {
                 .filter_map(|b| b.try_into().ok())
                 .for_each(|dxn| directions.push(dxn));
         } else {
-            let map_row: Vec<_> = line.bytes().filter_map(|b| b.try_into().ok()).collect();
+            let mut map_row = vec![];
+            for b in line.bytes() {
+                if is_double_width {
+                    let [l, r] = MapTile::try_from_2x(b).unwrap();
+                    map_row.push(l);
+                    map_row.push(r);
+                } else {
+                    let s = b.try_into().unwrap();
+                    map_row.push(s);
+                }
+            }
             if let Some(x) = map_row
                 .iter()
                 .enumerate()
@@ -43,7 +57,13 @@ fn parse_input(r: BufReader<File>) -> (Map, Vec<Direction>) {
             }
             map.tiles.push(map_row);
             if map.width == 0 {
-                map.width = line.trim().len();
+                let width = line.trim().len();
+                let width = if is_double_width {
+                    width + width
+                } else {
+                    width
+                };
+                map.width = width;
             }
             map.height += 1;
         }
@@ -51,21 +71,40 @@ fn parse_input(r: BufReader<File>) -> (Map, Vec<Direction>) {
     (map, directions)
 }
 
-fn do_part_one(map: &Map, directions: &[Direction]) -> u64 {
-    let mut map = map.clone();
+fn do_either_part(mut map: Map, directions: &[Direction]) -> u64 {
     for &dxn in directions.iter() {
         let _did_move = map.try_move(dxn);
         // println!("{map}");
     }
+    println!("{map}");
     map.box_gps_total()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum BoxType {
+    Single,
+    Left,
+    Right,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum MapTile {
     Open,
-    Box,
+    Box(BoxType),
     Wall,
     Robot,
+}
+
+impl MapTile {
+    fn try_from_2x(value: u8) -> Result<[Self; 2], AOCParseError> {
+        match value {
+            b'.' => Ok([MapTile::Open, MapTile::Open]),
+            b'O' | b'V' => Ok([MapTile::Box(BoxType::Left), MapTile::Box(BoxType::Right)]),
+            b'#' => Ok([MapTile::Wall, MapTile::Wall]),
+            b'@' => Ok([MapTile::Robot, MapTile::Open]),
+            _ => Err(AOCParseError),
+        }
+    }
 }
 
 impl TryFrom<u8> for MapTile {
@@ -74,7 +113,7 @@ impl TryFrom<u8> for MapTile {
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             b'.' => Ok(MapTile::Open),
-            b'O' | b'V' => Ok(MapTile::Box),
+            b'O' | b'V' => Ok(MapTile::Box(BoxType::Single)),
             b'#' => Ok(MapTile::Wall),
             b'@' => Ok(MapTile::Robot),
             _ => Err(AOCParseError),
@@ -86,7 +125,9 @@ impl Display for MapTile {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_char(match self {
             MapTile::Open => '.',
-            MapTile::Box => 'O',
+            MapTile::Box(BoxType::Single) => 'O',
+            MapTile::Box(BoxType::Left) => '[',
+            MapTile::Box(BoxType::Right) => ']',
             MapTile::Wall => '#',
             MapTile::Robot => '@',
         })
@@ -102,9 +143,9 @@ struct Map {
 }
 
 impl Map {
-    fn try_move(&mut self, dxn: Direction) -> bool {
+    fn try_move(&mut self, direction: Direction) -> bool {
         let (x, y) = self.robot_xy;
-        let (dx, dy) = dxn.as_wrapping_dxdy();
+        let (dx, dy) = direction.as_wrapping_dxdy();
         // "h" for "hypothetical"
         let (hx, hy) = (x.wrapping_add(dx), y.wrapping_add(dy));
         // Safety: all inputs are surrounded in walls, so all four neighbors of `robot_xy` are always legal indices.
@@ -115,26 +156,123 @@ impl Map {
                 self.robot_xy = (hx, hy);
                 true
             }
-            MapTile::Box => {
+            MapTile::Box(BoxType::Single) => {
                 // Only legal if not blocked by a wall.  The robot is infinitely strong; no "Sokoban" limit.
                 // "b" for "box's x/y"
                 let (mut bx, mut by) = (hx, hy);
                 // Safety: same as above; all inputs are surrounded in walls, so all neighbors are always legal.
-                while self.tiles[by][bx] == MapTile::Box {
+                while self.tiles[by][bx] == MapTile::Box(BoxType::Single) {
                     (bx, by) = (bx.wrapping_add(dx), by.wrapping_add(dy));
                 }
                 match self.tiles[by][bx] {
                     MapTile::Open => {
                         // Can move; similar to the usual `Open` case, but with a moved box.
-                        self.tiles[by][bx] = MapTile::Box;
+                        self.tiles[by][bx] = MapTile::Box(BoxType::Single);
                         self.tiles[hy][hx] = MapTile::Robot;
                         self.tiles[y][x] = MapTile::Open;
                         self.robot_xy = (hx, hy);
                         true
                     }
-                    MapTile::Box => unreachable!("while == Box, above"),
+                    MapTile::Box(BoxType::Single) => unreachable!("while == Box, above"),
+                    MapTile::Box(_) => panic!("shall not mix BoxType::Single with the others"),
                     MapTile::Wall => false,
                     MapTile::Robot => panic!("really cannot have two robots"),
+                }
+            }
+            MapTile::Box(lr @ _) => {
+                // (x,y) of the left box.
+                let mut coords = HashSet::new();
+                fn can_move(
+                    // Same for all recursion levels
+                    coords: &mut HashSet<(usize, usize)>,
+                    tiles: &Vec<Vec<MapTile>>,
+                    direction: Direction,
+                    // Changes
+                    (x, y): (usize, usize),
+                ) -> bool {
+                    assert_eq!(
+                        tiles[y][x],
+                        MapTile::Box(BoxType::Left),
+                        "always left; got ({x},{y}) while going {direction:?}",
+                    );
+                    let (dx, dy) = direction.as_wrapping_dxdy();
+                    let (hx, hy) = (x.wrapping_add(dx), y.wrapping_add(dy));
+                    let able_to_move = match direction {
+                        Direction::Up | Direction::Down => {
+                            match (tiles[hy][hx], tiles[hy][hx + 1]) {
+                                (MapTile::Robot, _) | (_, MapTile::Robot) => panic!(
+                                    "only have one robot; and it cannot reach around behind itself"
+                                ),
+                                (MapTile::Wall, _) | (_, MapTile::Wall) => false,
+                                (MapTile::Open, MapTile::Open) => true,
+                                (MapTile::Box(BoxType::Right), MapTile::Open) => {
+                                    can_move(coords, tiles, direction, (hx - 1, hy))
+                                }
+                                (MapTile::Box(BoxType::Left), MapTile::Box(BoxType::Right)) => {
+                                    can_move(coords, tiles, direction, (hx, hy))
+                                }
+                                (MapTile::Open, MapTile::Box(BoxType::Left)) => {
+                                    can_move(coords, tiles, direction, (hx + 1, hy))
+                                }
+                                (MapTile::Box(BoxType::Right), MapTile::Box(BoxType::Left)) => {
+                                    can_move(coords, tiles, direction, (hx - 1, hy))
+                                        && can_move(coords, tiles, direction, (hx + 1, hy))
+                                }
+                                _ => panic!("broken boxes"),
+                            }
+                        }
+                        Direction::Left => match tiles[hy][hx] {
+                            MapTile::Open => true,
+                            MapTile::Box(BoxType::Right) => {
+                                can_move(coords, tiles, direction, (hx - 1, hy))
+                            }
+                            MapTile::Box(_) => panic!("broken box"),
+                            MapTile::Wall => false,
+                            MapTile::Robot => panic!(
+                                "only have one robot; and it cannot reach around behind itself"
+                            ),
+                        },
+                        Direction::Right => match tiles[hy][hx + 1] {
+                            MapTile::Open => true,
+                            MapTile::Box(BoxType::Left) => {
+                                can_move(coords, tiles, direction, (hx + 1, hy))
+                            }
+                            MapTile::Box(_) => panic!("broken box"),
+                            MapTile::Wall => false,
+                            MapTile::Robot => panic!(
+                                "only have one robot; and it cannot reach around behind itself"
+                            ),
+                        },
+                    };
+                    if able_to_move {
+                        coords.insert((x, y));
+                    }
+                    able_to_move
+                }
+                // "p" for "pushed"
+                let (px, py) = if lr == BoxType::Left {
+                    (hx, hy)
+                } else {
+                    (hx - 1, hy)
+                };
+                if can_move(&mut coords, &self.tiles, direction, (px, py)) {
+                    // Do the move: delete old, then write new; "i" for "iteration box".
+                    for &(ix, iy) in coords.iter() {
+                        self.tiles[iy][ix] = MapTile::Open;
+                        self.tiles[iy][ix + 1] = MapTile::Open;
+                    }
+                    for &(ix, iy) in coords.iter() {
+                        let (bx, by) = (ix.wrapping_add(dx), iy.wrapping_add(dy));
+                        self.tiles[by][bx] = MapTile::Box(BoxType::Left);
+                        self.tiles[by][bx + 1] = MapTile::Box(BoxType::Right);
+                    }
+                    // Then move the robot; similar to the usual `Open` case, but with a moved box.
+                    self.tiles[y][x] = MapTile::Open;
+                    self.tiles[hy][hx] = MapTile::Robot;
+                    self.robot_xy = (hx, hy);
+                    true
+                } else {
+                    false
                 }
             }
             MapTile::Wall => false,
@@ -146,9 +284,12 @@ impl Map {
         let mut total_gps = 0_u64;
         for y in 0..self.height {
             for x in 0..self.width {
-                if self.tiles[y][x] == MapTile::Box {
-                    let gps = y * 100 + x;
-                    total_gps += gps as u64;
+                match self.tiles[y][x] {
+                    MapTile::Box(BoxType::Single) | MapTile::Box(BoxType::Left) => {
+                        let gps = y * 100 + x;
+                        total_gps += gps as u64;
+                    }
+                    _ => (),
                 }
             }
         }
@@ -168,7 +309,7 @@ impl Display for Map {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Direction {
     Up,
     Down,
