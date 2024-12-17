@@ -1,6 +1,6 @@
 use std::{
     cmp::Reverse,
-    collections::BinaryHeap,
+    collections::{BinaryHeap, HashMap, HashSet},
     fmt::{Display, Formatter, Write},
     fs::File,
     io::{BufRead, BufReader},
@@ -11,11 +11,11 @@ fn main() -> std::io::Result<()> {
     // Part one
     let f = File::open(path_input)?;
     let map = parse_input(BufReader::new(f));
-    let p1 = find_cheapest_path(&map).expect("path should exist");
-    dbg!(p1);
+    let best_path_cost = find_cheapest_path(&map).expect("path should exist");
+    dbg!(best_path_cost);
     // Part two
-    // let p2 = do_either_part(map, &directions);
-    // dbg!(p2);
+    let p2 = do_part_two(&map);
+    dbg!(p2);
     Ok(())
 }
 
@@ -52,8 +52,8 @@ struct Map {
     start_xy: (usize, usize),
     start_direction: Direction,
     end_xy: (usize, usize),
-    cost_straight: u64,
-    cost_turn: u64,
+    cost_straight: u32,
+    cost_turn: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -83,7 +83,7 @@ impl Display for MapTile {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
 #[allow(dead_code)]
 enum Direction {
@@ -92,20 +92,6 @@ enum Direction {
     South = 2,
     West = 3,
 }
-
-// impl TryFrom<u8> for Direction {
-//     type Error = AOCParseError;
-
-//     fn try_from(value: u8) -> Result<Self, Self::Error> {
-//         match value {
-//             b'^' => Ok(Direction::North),
-//             b'v' | b'V' => Ok(Direction::South),
-//             b'<' => Ok(Direction::West),
-//             b'>' => Ok(Direction::East),
-//             _ => Err(AOCParseError),
-//         }
-//     }
-// }
 
 impl Direction {
     fn as_wrapping_dxdy(&self) -> (usize, usize) {
@@ -126,6 +112,13 @@ impl Direction {
         // Safety: as long as `ENUM_VARIANTS` is accurate; relies on `repr(u8)`
         (0..Self::ENUM_VARIANTS).map(|e| unsafe { std::mem::transmute(e) })
     }
+
+    fn both_turns(&self) -> [Direction; 2] {
+        match self {
+            Direction::North | Direction::South => [Direction::East, Direction::West],
+            Direction::East | Direction::West => [Direction::North, Direction::South],
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -133,13 +126,13 @@ struct AOCParseError;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct StateAStar {
-    cost: u64,
+    cost: u32,
     x: usize,
     y: usize,
     d: Direction,
 }
 
-fn find_cheapest_path(map: &Map) -> Option<u64> {
+fn find_cheapest_path(map: &Map) -> Option<u32> {
     let mut seen = vec![vec![0_u8; map.width]; map.height];
     let mut min_heap = BinaryHeap::new();
     min_heap.push(Reverse(StateAStar {
@@ -168,7 +161,7 @@ fn find_cheapest_path(map: &Map) -> Option<u64> {
                     cost: cost + map.cost_straight,
                     x: xx,
                     y: yy,
-                    d: d,
+                    d,
                 }));
             }
         }
@@ -191,4 +184,82 @@ fn find_cheapest_path(map: &Map) -> Option<u64> {
         }
     }
     None
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct StateAStarWithHistory {
+    cost: u32,
+    d: Direction,
+    history: Vec<(usize, usize)>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct Where {
+    x: usize,
+    y: usize,
+    d: Direction,
+}
+
+fn do_part_two(map: &Map) -> u64 {
+    let mut min_heap = BinaryHeap::new();
+    min_heap.push(Reverse(StateAStarWithHistory {
+        cost: 0,
+        d: map.start_direction,
+        history: vec![map.start_xy],
+    }));
+    let mut best_costs = HashMap::new();
+    best_costs.insert(
+        Where {
+            x: map.start_xy.0,
+            y: map.start_xy.1,
+            d: map.start_direction,
+        },
+        0,
+    );
+    let mut best_path_cost = u32::MAX;
+    let mut best_seats = HashSet::new();
+    while let Some(Reverse(StateAStarWithHistory { cost, d, history })) = min_heap.pop() {
+        let (x, y) = *history.last().expect("initialized");
+        if (x, y) == map.end_xy {
+            best_path_cost = cost;
+            for &(xx, yy) in history.iter() {
+                best_seats.insert((xx, yy));
+            }
+            continue;
+        }
+        if cost >= best_path_cost {
+            // not `break` because of "if end" above
+            continue;
+        }
+        // Now, we either have not found the end; or have, but `cost` is too low.
+        let mut do_next = |new_cost, xx, yy, dd| {
+            let row: &Vec<MapTile> = &map.tiles[yy];
+            if row[xx] != MapTile::Open {
+                return;
+            }
+            let p = Where {
+                x: xx,
+                y: yy,
+                d: dd,
+            };
+            let costcost = best_costs.entry(p).or_insert(u32::MAX);
+            if new_cost <= *costcost {
+                *costcost = new_cost;
+                let mut history = history.clone();
+                history.push((xx, yy));
+                min_heap.push(Reverse(StateAStarWithHistory {
+                    cost: new_cost,
+                    d: dd,
+                    history,
+                }));
+            }
+        };
+        let (dx, dy) = d.as_wrapping_dxdy();
+        let (x_s, y_s) = (x.wrapping_add(dx), y.wrapping_add(dy));
+        do_next(cost + map.cost_straight, x_s, y_s, d);
+        let d_turn = d.both_turns();
+        do_next(cost + map.cost_turn, x, y, d_turn[0]);
+        do_next(cost + map.cost_turn, x, y, d_turn[1]);
+    }
+    best_seats.len() as u64
 }
