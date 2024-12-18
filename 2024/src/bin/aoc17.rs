@@ -12,15 +12,49 @@ fn main() -> std::io::Result<()> {
     let path_input = args.get(1).expect("Should have an input file");
     // Part one
     let f = File::open(path_input)?;
-    let mut state = parse_input(BufReader::new(f));
+    let state = parse_input(BufReader::new(f));
     println!("{state:?}");
-    state.run_until_halted();
-    let p1 = state.output;
+    let mut state_p1 = state.clone();
+    state_p1.run_until_halted(state_p1.abc);
+    let p1 = state_p1
+        .raw_output
+        .into_iter()
+        .fold("".to_owned(), |mut acc, x| {
+            if !acc.is_empty() {
+                acc.push(',');
+            }
+            acc.push(char::from_digit(x as u32, 10).unwrap());
+            acc
+        });
     dbg!(p1);
     // Part two
-    // let p2 = do_part_two(&map);
-    // dbg!(p2);
+    let raw_offset = state.raw_program.len() - 1;
+    let mut state = state;
+    state.abc.0 = 0;
+    let my_abc = state.abc;
+    let p2 = do_part_two(&mut state, my_abc, raw_offset);
+    dbg!(p2);
     Ok(())
+}
+
+fn do_part_two(state: &mut ProgramState, abc: (u64, u64, u64), raw_offset: usize) -> u64 {
+    if raw_offset == usize::MAX {
+        return abc.0;
+    }
+    for i in 0..8 {
+        let maybe_a = abc.0 * 8 + i;
+        let maybe_abc = (maybe_a, abc.1, abc.2);
+        state.run_until_halted(maybe_abc);
+        // println!("Found {:?}", state.raw_output);
+        if state.raw_output[0] == state.raw_program[raw_offset] {
+            // println!("\tTrying {:?}", raw_offset.wrapping_sub(1));
+            let aa = do_part_two(state, maybe_abc, raw_offset.wrapping_sub(1));
+            if aa > 0 {
+                return aa;
+            }
+        }
+    }
+    0
 }
 
 fn parse_input(mut r: BufReader<File>) -> ProgramState {
@@ -33,20 +67,31 @@ fn parse_input(mut r: BufReader<File>) -> ProgramState {
 #[derive(Clone, Debug)]
 struct ProgramState {
     abc: (u64, u64, u64),
-    program: Vec<Instruction>,
-    /// Index into `program`; is half of problem statement's values.
+    raw_program: Vec<u64>,
     pc: usize,
-    output: String,
+    raw_output: Vec<u64>,
 }
 impl ProgramState {
-    fn run_until_halted(&mut self) {
+    fn new(a: u64, b: u64, c: u64, raw_program: Vec<u64>) -> Self {
+        Self {
+            abc: (a, b, c),
+            raw_program,
+            pc: 0,
+            raw_output: vec![],
+        }
+    }
+
+    fn run_until_halted(&mut self, abc: (u64, u64, u64)) {
+        self.abc = abc;
+        self.pc = 0;
+        self.raw_output.clear();
         while self.step() {
             // keep going
         }
     }
 
     fn step(&mut self) -> bool {
-        let Some(&Instruction(opcode, data)) = self.program.get(self.pc) else {
+        let Some(&[opcode, data]) = self.raw_program.get(self.pc..self.pc + 2) else {
             return false;
         };
         let literal = data;
@@ -59,31 +104,25 @@ impl ProgramState {
         };
         const NO_WRAP: u64 = 0x3F;
         match opcode {
-            Opcode::Adv => self.abc.0 = self.abc.0 >> (combo & NO_WRAP),
-            Opcode::Bxl => self.abc.1 ^= literal,
-            Opcode::Bst => self.abc.1 = combo & 0x07,
-            Opcode::Jnz => {
+            0 => self.abc.0 = self.abc.0 >> (combo & NO_WRAP),
+            1 => self.abc.1 ^= literal,
+            2 => self.abc.1 = combo & 0x07,
+            3 => {
                 if self.abc.0 != 0 {
-                    // Half because we group opcodes with their data.
-                    if literal % 2 == 1 {
-                        panic!("bad model");
-                    }
-                    self.pc = (literal / 2) as usize;
+                    self.pc = literal as usize;
                     return true;
                 }
             }
-            Opcode::Bxc => self.abc.1 ^= self.abc.2,
-            Opcode::Out => {
-                if !self.output.is_empty() {
-                    self.output.push(',');
-                }
+            4 => self.abc.1 ^= self.abc.2,
+            5 => {
                 let out = combo & 0x07;
-                self.output.push_str(&out.to_string());
+                self.raw_output.push(out);
             }
-            Opcode::Bdv => self.abc.1 = self.abc.0 >> (combo & NO_WRAP),
-            Opcode::Cdv => self.abc.2 = self.abc.0 >> (combo & NO_WRAP),
+            6 => self.abc.1 = self.abc.0 >> (combo & NO_WRAP),
+            7 => self.abc.2 = self.abc.0 >> (combo & NO_WRAP),
+            oops @ _ => panic!("bad opcode {oops}"),
         }
-        self.pc += 1;
+        self.pc += 2;
         true
     }
 }
@@ -116,61 +155,15 @@ impl FromStr for ProgramState {
             .as_str()
             .parse::<u64>()
             .expect("numeric C");
-        let mut program = vec![];
-        let raw_program = caps.get(4).unwrap().as_str();
-        let mut opcode = None;
-        for word in raw_program.split(',') {
+        let mut raw_program = vec![];
+        let p = caps.get(4).unwrap().as_str();
+        for word in p.split(',') {
             let x: u64 = word.parse().unwrap();
-            if let Some(opcode) = opcode.take() {
-                assert!(
-                    (0..=6).contains(&x),
-                    "Combo operand 7 is reserved and will not appear in valid programs."
-                );
-                program.push(Instruction(opcode, x));
-            } else {
-                opcode = Some(x.try_into().expect("sane input"));
-            }
+            raw_program.push(x);
         }
-        Ok(ProgramState {
-            abc: (a, b, c),
-            program,
-            pc: 0,
-            output: String::new(),
-        })
+        Ok(ProgramState::new(a, b, c, raw_program))
     }
 }
-
-#[derive(Clone, Copy, Debug)]
-#[allow(dead_code)] // constructed via transmute()
-enum Opcode {
-    Adv = 0,
-    Bxl = 1,
-    Bst = 2,
-    Jnz = 3,
-    Bxc = 4,
-    Out = 5,
-    Bdv = 6,
-    Cdv = 7,
-}
-
-impl Opcode {
-    const ENUM_VARIANTS: u64 = 8;
-}
-
-impl TryFrom<u64> for Opcode {
-    type Error = AOCParseError;
-
-    fn try_from(value: u64) -> Result<Self, Self::Error> {
-        if (0..Opcode::ENUM_VARIANTS).contains(&value) {
-            unsafe { Ok(std::mem::transmute(value as u8)) }
-        } else {
-            Err(AOCParseError)
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Instruction(Opcode, u64);
 
 #[derive(Debug, PartialEq, Eq)]
 struct AOCParseError;
