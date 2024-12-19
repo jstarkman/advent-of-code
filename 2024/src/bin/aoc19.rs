@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs::File,
     io::{BufRead, BufReader},
     ops::Deref,
@@ -13,8 +14,8 @@ fn main() -> std::io::Result<()> {
     let p1 = do_part_one(&have, &want);
     dbg!(p1);
     // Part two
-    // let p2 = do_either_part(map, &directions);
-    // dbg!(p2);
+    let p2 = do_part_two(&have, &want);
+    dbg!(p2);
     Ok(())
 }
 
@@ -59,6 +60,35 @@ fn is_possible(have: &TrieNode5, wanted: &str) -> bool {
     }
     // println!("\tFailed to find {wanted}");
     false
+}
+
+fn do_part_two(have: &TrieNode5, want: &[String]) -> u64 {
+    let mut retval = 0;
+    let mut cache = HashMap::new();
+    for wanted in want.iter() {
+        let me = count_the_ways(&mut cache, have, wanted);
+        retval += me;
+    }
+    retval
+}
+
+fn count_the_ways(cache: &mut HashMap<String, u64>, have: &TrieNode5, wanted: &str) -> u64 {
+    if wanted.is_empty() {
+        return 1;
+    }
+    if let Some(&me) = cache.get(wanted) {
+        return me;
+    }
+    let mut retval = 0;
+    for i in 1..=wanted.len() {
+        let prefix = &wanted[..i];
+        if have.contains(prefix) {
+            let me = count_the_ways(cache, have, &wanted[i..]);
+            retval += me;
+        }
+    }
+    cache.insert(wanted.to_owned(), retval);
+    retval
 }
 
 struct TrieNode5Index(usize);
