@@ -14,6 +14,8 @@ fn main() -> std::io::Result<()> {
     let p1 = do_part_one(&final_codes, 3);
     dbg!(p1);
     // Part two
+    let p2 = do_part_one(&final_codes, 26);
+    dbg!(p2);
     Ok(())
 }
 
@@ -22,9 +24,10 @@ fn parse_input(r: BufReader<File>) -> Vec<String> {
 }
 
 fn do_part_one(goals: &[String], layers: usize) -> usize {
+    let mut cache = HashMap::new();
     let mut complexities = 0;
     for goal in goals.iter() {
-        let len = shortest_sequence(goal, layers);
+        let len = shortest_sequence(&mut cache, goal, layers);
         let numeric_part = goal[0..goal.len() - 1].parse::<usize>().unwrap();
         let complexity = len * numeric_part;
         complexities += complexity;
@@ -32,9 +35,17 @@ fn do_part_one(goals: &[String], layers: usize) -> usize {
     complexities
 }
 
-fn shortest_sequence(goal: &str, layer: usize) -> usize {
+fn shortest_sequence<'goal>(
+    cache: &mut HashMap<(&'goal str, usize), usize>,
+    goal: &'goal str,
+    layer: usize,
+) -> usize {
     if layer == 0 {
         return goal.len();
+    }
+    let cache_key = (goal, layer);
+    if let Some(&len) = cache.get(&cache_key) {
+        return len;
     }
     // always starts from (and returns to) button `A` on each keypad.
     let mut len = 0;
@@ -42,9 +53,10 @@ fn shortest_sequence(goal: &str, layer: usize) -> usize {
     for w in std::iter::once(&from_a[..]).chain(goal.as_bytes().windows(2)) {
         let from_to = (w[0], w[1]);
         let subseq = STATE_TRANSITION_TABLE[&from_to].as_str();
-        let rec = shortest_sequence(subseq, layer - 1);
+        let rec = shortest_sequence(cache, subseq, layer - 1);
         len += rec;
     }
+    cache.insert(cache_key, len);
     len
 }
 
